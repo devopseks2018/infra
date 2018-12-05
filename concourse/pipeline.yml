@@ -3,15 +3,15 @@ jobs:
 - name: deploy-app
   plan:
   - aggregate:
-    - get: monitoring-app
-    - get: monitoring-infra
+    - get: exam-app
+    - get: exam-infra
   - task: mvn_build
-    file: monitoring-infra/concourse/java/task.yml
-    input_mapping: {source: monitoring-app}
+    file: exam-infra/concourse/java/task.yml
+    input_mapping: {source: exam-app}
 
   - task: push_to_heroku
-    file: monitoring-infra/concourse/heroku/push_master_to_heroku.yml
-    input_mapping: {source: monitoring-app}
+    file: exam-infra/concourse/heroku/push_master_to_heroku.yml
+    input_mapping: {source: exam-app}
     params:
       app_name: ((heroku_app_name))
       heroku_email: ((heroku_email))
@@ -21,10 +21,10 @@ jobs:
 - name: infra
   plan:
   - aggregate:
-    - get: monitoring-infra
+    - get: exam-infra
   - task: apply
-    file: monitoring-infra/concourse/terraform/task.yml
-    input_mapping: {source: monitoring-infra}
+    file: exam-infra/concourse/terraform/task.yml
+    input_mapping: {source: exam-infra}
     params:
       github_token: ((github_token))
       heroku_api_key: ((heroku_api_key))
@@ -32,15 +32,44 @@ jobs:
       command: apply
       directories: |
           terraform
-  - put: monitoring-infra
+  - put: exam-infra
     params:
       repository: with-state
       rebase: true
 
+      - name: build
+        plan:
+        - aggregate:
+          - get: exam-app
+            trigger: true
+          - get: exam-infra
+        - task: mvn_build
+          file: exam-infra/concourse/java/task.yml #mvn_build task.yml
+          input_mapping: {source: exam-app}
+        - put: docker-image-app
+          params:
+            build: exam-app
+
+
+            - name: deploy-ci
+              plan:
+              - aggregate:
+                - get: exam-infra
+                - get: docker-image-app
+                  trigger: true
+                  passed: [build]
+              - task: push_to_heroku
+                file: exam-infra/concourse/heroku/deploy_task.yml
+                input_mapping: {source: docker-image-app}
+                params:
+                  app_name: ((heroku_app_name))
+                  heroku_email: ((heroku_email))
+                  heroku_api_token: ((heroku_api_key))
+
 resources:
 
 # Replace with your own repository
-- name: monitoring-app
+- name: app
   type: git
   source:
       uri: https://github.com/devopseks2018/app
@@ -48,9 +77,16 @@ resources:
       private_key: ((deploy_key_app))
 
 # Replace with your own repository
-- name: monitoring-infra
+- name: infra
   type: git
   source:
       uri: https://github.com/devopseks2018/infra
       branch: master
       private_key: ((deploy_key_infra))
+
+- name: docker-image-app
+  type: docker-image
+  source:
+  repository: registry.heroku.com/((heroku_app_name))/web
+  username: ((heroku_email))
+  password: ((heroku_api_key))
